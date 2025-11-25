@@ -1,0 +1,22 @@
+recipient_id,first_name,last_name,preferred_first_name,preferred_full_name,address,city,state,zip_code,unit_number
+1,John,Smith,John,John Smith,123 Main Street,New York,NY,10001,
+2,Jane,Doe,Jane,Jane Doe,456 Oak Avenue,Los Angeles,CA,90001,Apt 2B
+3,Robert,Johnson,Bob,Bob Johnson,789 Pine Road,Chicago,IL,60601,Unit 5
+4,Mary,Williams,Mary,Mary Williams,321 Elm Street,Houston,TX,77001,
+5,Michael,Brown,Mike,Mike Brown,654 Maple Drive,Phoenix,AZ,85001,Suite 100
+6,Emily,Davis,Emily,Emily Davis,987 Cedar Lane,Philadelphia,PA,19101,
+7,David,Miller,Dave,Dave Miller,147 Birch Court,San Antonio,TX,78201,Apt 3
+8,Sarah,Garcia,Sarah,Sarah Garcia,258 Spruce Way,San Diego,CA,92101,
+9,James,Martinez,Jim,Jim Martinez,369 Willow Street,Dallas,TX,75201,Unit 12
+10,Jennifer,Anderson,Jen,Jen Anderson,741 Ash Avenue,San Jose,CA,95101,
+11,William,Taylor,Will,Will Taylor,852 Poplar Road,Austin,TX,78701,
+12,Amanda,Thomas,Mandy,Mandy Thomas,963 Hickory Drive,Jacksonville,FL,32201,Suite 200
+13,Christopher,Lee,Chris,Chris Lee,159 Sycamore Lane,Fort Worth,TX,76101,
+14,Jessica,Harris,Jess,Jess Harris,357 Chestnut Court,Columbus,OH,43201,Apt 4A
+15,Matthew,Clark,Matt,Matt Clark,468 Walnut Street,Charlotte,NC,28201,
+16,Ashley,Lewis,Ash,Ash Lewis,579 Magnolia Avenue,San Francisco,CA,94101,Unit 8
+17,Daniel,Robinson,Dan,Dan Robinson,680 Dogwood Road,Indianapolis,IN,46201,
+18,Michelle,Walker,Michelle,Michelle Walker,791 Redwood Way,Seattle,WA,98101,Suite 15
+19,Andrew,Hall,Andy,Andy Hall,802 Cypress Lane,Denver,CO,80201,
+20,Lisa,Allen,Lisa,Lisa Allen,913 Juniper Court,Boston,MA,02101,Apt 7B
+
