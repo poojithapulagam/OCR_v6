@@ -82,47 +82,26 @@ class LLMExtractor:
             return []
     
     def _build_extraction_prompt(self, ocr_text: str) -> str:
-        """
-        Balanced prompt - concise but accurate.
-        """
-        # Optimized prompt: short but clear
-        prompt = f"""Extract recipient info from shipping label OCR.
+        """Build the prompt for the LLM."""
+        return f"""Instruction: Extract the recipient name, full address, and tracking number from the shipping label text below.
+Return ONLY a JSON object with keys: "name", "address", "tracking".
+If a value is not found, use null. Do not add any other text.
 
-Need:
-1. Full name (first + last)
-2. Complete address (street, city, state, zip)
-3. Tracking number (if any)
+Text:
+{ocr_text}
 
-OCR text:
-{ocr_text[:300]}
+JSON:"""
 
-Return JSON:
-{{"name": "", "address": "", "tracking": ""}}"""
-        return prompt
-    
-    def _call_ollama(self, prompt: str) -> str:
-        """
-        Call Ollama API with the given prompt.
-        
-        Args:
-            prompt: The prompt to send to Phi-3
-            
-        Returns:
-            Response text from the LLM
-        """
+    def _call_ollama(self, prompt: str) -> Dict[str, Any]:
+        """Call Ollama API."""
         payload = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
-            "format": "json",
             "options": {
-                "num_predict": 120,  # Balanced for speed + completeness
-                "temperature": 0.2,  # Lower for accuracy
-                "top_k": 30,
-                "top_p": 0.9,
-                "repeat_penalty": 1.1,  # Prevent repetition
-                "num_ctx": 1024,  # Enough context
-                "num_thread": 8,  # Use more CPU threads
+                "temperature": 0.1,
+                "num_predict": 150,
+                "stop": ["\\n\\n", "User:", "Instruction:"]
             }
         }
         
@@ -131,198 +110,132 @@ Return JSON:
             try:
                 health_check = requests.get(f"{self.base_url}/api/tags", timeout=5)
                 if health_check.status_code != 200:
-                    raise ConnectionError(
-                        f"Ollama service not accessible at {self.base_url}. "
-                        f"Status: {health_check.status_code}. "
-                        f"Make sure Ollama is running: 'ollama serve' or check if it's installed."
-                    )
+                    raise ConnectionError(f"Ollama service not accessible. Status: {health_check.status_code}")
             except requests.exceptions.ConnectionError:
-                raise ConnectionError(
-                    f"Cannot connect to Ollama at {self.base_url}. "
-                    f"Please ensure Ollama is running. "
-                    f"Start it with: 'ollama serve' or check your OLLAMA_BASE_URL in config.py or .env file."
-                )
+                raise ConnectionError(f"Cannot connect to Ollama at {self.base_url}")
             
             response = requests.post(
                 self.api_url,
                 json=payload,
-                timeout=8  # Balanced timeout
+                timeout=15
             )
             
             if response.status_code == 404:
-                # Check if model exists
-                try:
-                    models_resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
-                    if models_resp.status_code == 200:
-                        models = models_resp.json().get("models", [])
-                        model_names = [m.get("name", "") for m in models]
-                        raise ValueError(
-                            f"Model '{self.model}' not found. "
-                            f"Available models: {', '.join(model_names) if model_names else 'none'}. "
-                            f"Download the model with: 'ollama pull {self.model}' or update OLLAMA_MODEL in config.py/.env"
-                        )
-                except:
-                    pass
-                raise ValueError(
-                    f"Ollama API endpoint not found (404). "
-                    f"Model: {self.model}, URL: {self.api_url}. "
-                    f"Check if model exists: 'ollama list'"
-                )
-            
+                logger.warning(f"Model {self.model} not found, attempting to pull...")
+                import subprocess
+                subprocess.run(f"ollama pull {self.model}", shell=True, check=True)
+                response = requests.post(self.api_url, json=payload, timeout=30)
+                
             response.raise_for_status()
-            result = response.json()
-            
-            # Ollama returns the response in 'response' field
-            return result.get("response", "")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Ollama API request failed: {e}")
+            return response.json()
+        except requests.exceptions.Timeout:
             raise
-    
-    def _parse_response(self, response_text: str) -> List[Dict[str, str]]:
-        """
-        Parse LLM response into structured name-address pairs.
-        Improved parsing to handle various response formats.
-        
-        Args:
-            response_text: Raw response from Ollama
-            
-        Returns:
-            List of dictionaries with extracted pairs
-        """
-        # Clean the response text
-        response_text = response_text.strip()
-        
-        # Try to extract JSON from the response
-        # Sometimes LLMs wrap JSON in markdown code blocks
-        if "```json" in response_text:
-            start = response_text.find("```json") + 7
-            end = response_text.find("```", start)
-            response_text = response_text[start:end].strip()
-        elif "```" in response_text:
-            start = response_text.find("```") + 3
-            end = response_text.find("```", start)
-            if end > start:
-                response_text = response_text[start:end].strip()
-            else:
-                response_text = response_text[start:].strip()
-        
+        except Exception as e:
+            logger.error(f"Ollama API error: {e}")
+            raise
+
+    def _parse_response(self, response: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Parse the LLM response."""
         try:
-            data = json.loads(response_text)
+            response_text = response.get("response", "").strip()
+            logger.debug(f"LLM Response: {response_text}")
             
-            # Handle both list and dict responses
-            if isinstance(data, list):
-                pairs = data
-            elif isinstance(data, dict):
-                # If it's a dict, try to find a list field
-                if "pairs" in data:
-                    pairs = data["pairs"]
-                elif "results" in data:
-                    pairs = data["results"]
-                elif "input_name" in data or "input_address" in data:
-                    # If it's a single pair as dict
-                    pairs = [data]
-                else:
-                    # Try to find any list-like structure
-                    pairs = []
-                    for key, value in data.items():
-                        if isinstance(value, list):
-                            pairs = value
-                            break
-                    if not pairs:
-                        pairs = [data]
+            # Try to find JSON object using regex if direct parse fails
+            import re
+            json_match = re.search(r'\\{.*\\}', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                # Clean up potential common JSON errors
+                json_str = json_str.replace("'", '"')
+                json_str = re.sub(r',\\s*\\}', '}', json_str)
+                try:
+                    data = json.loads(json_str)
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse extracted JSON: {json_str}")
+                    return []
             else:
-                logger.warning(f"Unexpected response format: {type(data)}")
+                try:
+                    data = json.loads(response_text)
+                except json.JSONDecodeError:
+                    logger.warning("No JSON object found in response")
+                    return []
+            
+            # Normalize to list
+            if isinstance(data, dict):
+                pairs = [data]
+            elif isinstance(data, list):
+                pairs = data
+            else:
                 return []
-            
-            # Validate and normalize pairs
-            normalized_pairs = []
+                
+            valid_pairs = []
             for pair in pairs:
-                if isinstance(pair, dict):
-                    # Get name - handle various field names
-                    name = (pair.get("input_name") or pair.get("name") or 
-                           pair.get("recipient_name") or pair.get("full_name") or "")
+                # Get name
+                name = (pair.get("input_name") or pair.get("name") or 
+                       pair.get("recipient_name") or pair.get("full_name") or "")
+                
+                # Get address
+                address = (pair.get("input_address") or pair.get("address") or 
+                          pair.get("recipient_address") or pair.get("full_address") or "")
+                
+                # Get tracking number
+                tracking = (pair.get("tracking") or pair.get("tracking_number") or 
+                           pair.get("tracking_id") or None)
+                
+                # Clean up address if it's a dict
+                if isinstance(address, dict):
+                    street = address.get('street', '').strip()
+                    city = address.get('city', '').strip()
+                    state = address.get('state', '').strip()
+                    zip_code = address.get('zip', '').strip()
                     
-                    # Get address - handle various field names
-                    address = (pair.get("input_address") or pair.get("address") or 
-                              pair.get("recipient_address") or pair.get("full_address") or "")
+                    parts = []
+                    if street: parts.append(street)
+                    if city: parts.append(city)
+                    if state and zip_code: parts.append(f"{state} {zip_code}")
+                    elif state: parts.append(state)
+                    elif zip_code: parts.append(zip_code)
                     
-                    # Get tracking number
-                    tracking = (pair.get("tracking") or pair.get("tracking_number") or 
-                               pair.get("tracking_id") or None)
-                    
-                    # Clean up - handle if address is a list
-                    if isinstance(address, list):
-                        address = ", ".join(str(x) for x in address if x)
-                    
-                    name = str(name).strip() if name else ""
-                    address = str(address).strip() if address else ""
-                    tracking = str(tracking).strip() if tracking and str(tracking).lower() != "null" else None
-                    
-                    # Validate name - be more lenient for speed
-                    name_words = name.split()
-                    if len(name_words) < 2:
-                        logger.warning(f"Short name '{name}', might be incomplete")
-                        # Continue anyway - don't skip
-                    
-                    # Filter out place names that were incorrectly extracted as names
-                    place_names = ['pompano', 'pamgiano', 'pumgiana', 'beach', 'roseville', 'williston', 
-                                  'tampa', 'norcross', 'chicago', 'webster', 'bethesda', 'folsom',
-                                  'cleveland', 'harvey', 'euless', 'mishawaka', 'fort', 'collins']
-                    if any(place in name.lower() for place in place_names):
-                        logger.warning(f"Filtered out place name as person name: {name}")
-                        continue
-                    
-                    # Filter out common non-name words
-                    non_name_words = ['ship', 'priority', 'mail', 'ground', 'ups', 'fedex', 'usps', 
-                                     'tracking', 'postage', 'fees', 'paid', 'sender', 'shipper',
-                                     'notifii', 'llc', 'corporation', 'company', 'apartments']
-                    if any(word in name.lower() for word in non_name_words):
-                        logger.warning(f"Filtered out non-name word: {name}")
-                        continue
-                    
-                    normalized = {
-                        "input_name": name,
-                        "input_address": address,
-                        "tracking_number": tracking
-                    }
-                    
-                    # Add if we have at least name or address
-                    if (name and len(name) > 2) or (address and len(address) > 5):
-                        normalized_pairs.append(normalized)
-                    else:
-                        logger.warning(f"Skipping pair: {normalized}")
+                    address = ", ".join(parts) if parts else ""
+                elif isinstance(address, list):
+                    address = ", ".join(str(x) for x in address if x)
+                
+                name = str(name).strip() if name else ""
+                address = str(address).strip() if address else ""
+                tracking = str(tracking).strip() if tracking and str(tracking).lower() != "null" else None
+                
+                # Validate name
+                name_words = name.split()
+                if len(name_words) < 2:
+                    logger.warning(f"Short name '{name}', might be incomplete")
+                
+                # Filter out place names
+                place_names = ['pompano', 'pamgiano', 'pumgiana', 'beach', 'roseville', 'williston', 
+                              'tampa', 'norcross', 'chicago', 'webster', 'bethesda', 'folsom',
+                              'cleveland', 'harvey', 'euless', 'mishawaka', 'fort', 'collins']
+                if any(place in name.lower() for place in place_names):
+                    logger.warning(f"Filtered out place name as person name: {name}")
+                    continue
+                
+                # Filter out non-name words
+                non_name_words = ['ship', 'priority', 'mail', 'ground', 'ups', 'fedex', 'usps', 
+                                 'tracking', 'postage', 'fees', 'paid', 'sender', 'shipper',
+                                 'notifii', 'llc', 'corporation', 'company', 'apartments']
+                if any(word in name.lower() for word in non_name_words):
+                    logger.warning(f"Filtered out non-name word: {name}")
+                    continue
+                
+                normalized = {
+                    "input_name": name,
+                    "input_address": address,
+                    "tracking_number": tracking
+                }
+                
+                if (name and len(name) > 2) or (address and len(address) > 5):
+                    valid_pairs.append(normalized)
             
-            return normalized_pairs
+            return valid_pairs
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-            logger.debug(f"Response text: {response_text[:500]}")
-            # Try to extract name and address using regex as fallback
-            return self._fallback_extraction(response_text)
-    
-    def _fallback_extraction(self, text: str) -> List[Dict[str, str]]:
-        """
-        Fallback extraction using regex patterns when JSON parsing fails.
-        
-        Args:
-            text: Response text to parse
-            
-        Returns:
-            List of extracted pairs
-        """
-        pairs = []
-        # Try to find name and address patterns in the text
-        # This is a simple fallback - not as accurate as LLM extraction
-        name_pattern = r'(?:name|Name|NAME)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)'
-        address_pattern = r'(\d+\s+[A-Za-z\s]+(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|way|court|ct)[^,]*,\s*[A-Za-z\s]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?)'
-        
-        name_match = re.search(name_pattern, text)
-        address_match = re.search(address_pattern, text, re.IGNORECASE)
-        
-        if name_match and address_match:
-            pairs.append({
-                "input_name": name_match.group(1).strip(),
-                "input_address": address_match.group(1).strip()
-            })
-        
-        return pairs
+        except Exception as e:
+            logger.error(f"Error parsing response: {e}")
+            return []
